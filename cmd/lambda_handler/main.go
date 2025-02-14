@@ -15,30 +15,29 @@ import (
 )
 
 // APIGatewayLambdaHandler - API Gateway からのリクエストを処理
-func APIGatewayLambdaHandler(ctx context.Context, req events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
+func APIGatewayLambdaHandler(ctx context.Context, req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	// 🔥 API Gateway のリクエスト詳細をログに出力
 	logRequestDetails(req)
 
 	// Gorilla Mux ルーターを作成
 	r := mux.NewRouter().StrictSlash(true)
 
-	// ルートハンドラーを登録
-	r.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
-		response := map[string]string{"message": "Hello from /test"}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
-	}).Methods("GET")
+	// ルートハンドラーを登録 (エンドポイントごとに処理を分ける)
+	r.HandleFunc("/", rootHandler).Methods("GET")
+	r.HandleFunc("/test", testHandler).Methods("GET")
+	r.HandleFunc("/user", userHandler).Methods("GET", "POST")
+	r.HandleFunc("/order", orderHandler).Methods("GET", "POST")
 
-	// `req.RawPath` からパスを取得
-	reqPath := normalizePath(req.RawPath)
-	httpMethod := req.RequestContext.HTTP.Method
+	// `req.Path` からパスを取得
+	reqPath := normalizePath(req.Path)
+	httpMethod := req.HTTPMethod
 
 	// リクエストを Mux で処理
 	body := ioutil.NopCloser(strings.NewReader(req.Body))
 	httpReq, err := http.NewRequest(httpMethod, reqPath, body)
 	if err != nil {
 		log.Println("Error creating request:", err)
-		return events.APIGatewayV2HTTPResponse{StatusCode: 500, Body: "Internal Server Error"}, nil
+		return events.APIGatewayProxyResponse{StatusCode: 500, Body: "Internal Server Error"}, nil
 	}
 
 	// ヘッダーをコピー
@@ -47,11 +46,11 @@ func APIGatewayLambdaHandler(ctx context.Context, req events.APIGatewayV2HTTPReq
 	}
 
 	// Mux に渡すカスタムレスポンスライター
-	rw := &ResponseWriter{Headers: map[string]string{}, StatusCode: 404} // 🔥 デフォルト `404`
+	rw := &ResponseWriter{Headers: map[string]string{}, StatusCode: 404}
 	r.ServeHTTP(rw, httpReq)
 
 	// Lambda のレスポンスを構成
-	response := events.APIGatewayV2HTTPResponse{
+	response := events.APIGatewayProxyResponse{
 		StatusCode: rw.StatusCode,
 		Headers:    rw.Headers,
 		Body:       rw.Body,
@@ -63,11 +62,71 @@ func APIGatewayLambdaHandler(ctx context.Context, req events.APIGatewayV2HTTPReq
 	return response, nil
 }
 
-// normalizePath - API Gateway の `/{proxy}` 形式を `/test` に変換
+// 🔹 ルート ("/") のハンドラー
+func rootHandler(w http.ResponseWriter, r *http.Request) {
+	response := map[string]string{"message": "Welcome to the root endpoint"}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// 🔹 `/test` のハンドラー
+func testHandler(w http.ResponseWriter, r *http.Request) {
+	response := map[string]string{"message": "Hello from /test"}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// 🔹 `/user` のハンドラー (GET & POST)
+func userHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "POST" {
+		response := map[string]string{"message": "User created"}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	} else {
+		response := map[string]string{"message": "User endpoint"}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}
+}
+
+// 🔹 `/order` のハンドラー (GET & POST)
+func orderHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "POST" {
+		response := map[string]string{"message": "Order created"}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	} else {
+		response := map[string]string{"message": "Order endpoint"}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}
+}
+
+// 🔥 API Gateway のリクエスト詳細をログに出力
+func logRequestDetails(req events.APIGatewayProxyRequest) {
+	logData := map[string]interface{}{
+		"HTTPMethod":  req.HTTPMethod,
+		"Path":        req.Path,
+		"Headers":     req.Headers,
+		"QueryParams": req.QueryStringParameters,
+		"PathParams":  req.PathParameters,
+		"RequestID":   req.RequestContext.RequestID,
+		"Stage":       req.RequestContext.Stage,
+		"Domain":      req.RequestContext.DomainName,
+		"Body":        req.Body,
+	}
+	jsonData, err := json.MarshalIndent(logData, "", "  ")
+	if err != nil {
+		log.Println("Error marshaling request data:", err)
+	} else {
+		log.Println("🔥 Received API Gateway Event:\n", string(jsonData))
+	}
+}
+
 func normalizePath(path string) string {
 	parts := strings.Split(path, "/")
-	if len(parts) > 1 {
-		return "/" + strings.Join(parts[1:], "/") // `/{proxy}` → `/test`
+	if len(parts) > 2 {
+		return "/" + strings.Join(parts[2:], "/")
 	}
 	return path
 }
@@ -92,42 +151,15 @@ func (rw *ResponseWriter) WriteHeader(statusCode int) {
 	rw.StatusCode = statusCode
 }
 
-// 🔥 API Gateway のリクエスト詳細をログに出力
-func logRequestDetails(req events.APIGatewayV2HTTPRequest) {
-	// ログ用データ構造体
-	logData := map[string]interface{}{
-		"HTTPMethod":  req.RequestContext.HTTP.Method,
-		"RawPath":     req.RawPath,
-		"Headers":     req.Headers,
-		"QueryParams": req.QueryStringParameters,
-		"PathParams":  req.PathParameters,
-		"RequestID":   req.RequestContext.RequestID,
-		"Stage":       req.RequestContext.Stage,
-		"Domain":      req.RequestContext.DomainName,
-		"Body":        req.Body,
-	}
-
-	// JSON に変換して出力
-	jsonData, err := json.MarshalIndent(logData, "", "  ")
-	if err != nil {
-		log.Println("Error marshaling request data:", err)
-	} else {
-		log.Println("🔥 Received API Gateway Event:\n", string(jsonData))
-	}
-}
-
 func main() {
-	// 環境変数で Lambda 環境かどうかチェック
 	if _, isLambda := os.LookupEnv("AWS_LAMBDA_FUNCTION_NAME"); isLambda {
 		lambda.Start(APIGatewayLambdaHandler)
 	} else {
-		// ローカル開発用サーバー
 		r := mux.NewRouter().StrictSlash(true)
-		r.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
-			response := map[string]string{"message": "Hello from /test"}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(response)
-		}).Methods("GET")
+		r.HandleFunc("/", rootHandler).Methods("GET")
+		r.HandleFunc("/test", testHandler).Methods("GET")
+		r.HandleFunc("/user", userHandler).Methods("GET", "POST")
+		r.HandleFunc("/order", orderHandler).Methods("GET", "POST")
 
 		log.Println("Starting local server on :8080")
 		log.Fatal(http.ListenAndServe(":8080", r))
