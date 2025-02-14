@@ -15,8 +15,8 @@ import (
 )
 
 // APIGatewayLambdaHandler - API Gateway からのリクエストを処理
-func APIGatewayLambdaHandler(ctx context.Context, req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	// 🔥 API Gateway のリクエストを詳細にログ出力
+func APIGatewayLambdaHandler(ctx context.Context, req events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
+	// 🔥 API Gateway のリクエスト詳細をログに出力
 	logRequestDetails(req)
 
 	// Gorilla Mux ルーターを作成
@@ -29,15 +29,16 @@ func APIGatewayLambdaHandler(ctx context.Context, req events.APIGatewayProxyRequ
 		json.NewEncoder(w).Encode(response)
 	}).Methods("GET")
 
-	// `req.Path` を `/test` のみに変換
-	reqPath := normalizePath(req.Path)
+	// `req.RawPath` からパスを取得
+	reqPath := normalizePath(req.RawPath)
+	httpMethod := req.RequestContext.HTTP.Method
 
 	// リクエストを Mux で処理
 	body := ioutil.NopCloser(strings.NewReader(req.Body))
-	httpReq, err := http.NewRequest(req.HTTPMethod, reqPath, body)
+	httpReq, err := http.NewRequest(httpMethod, reqPath, body)
 	if err != nil {
 		log.Println("Error creating request:", err)
-		return events.APIGatewayProxyResponse{StatusCode: 500, Body: "Internal Server Error"}, nil
+		return events.APIGatewayV2HTTPResponse{StatusCode: 500, Body: "Internal Server Error"}, nil
 	}
 
 	// ヘッダーをコピー
@@ -50,7 +51,7 @@ func APIGatewayLambdaHandler(ctx context.Context, req events.APIGatewayProxyRequ
 	r.ServeHTTP(rw, httpReq)
 
 	// Lambda のレスポンスを構成
-	response := events.APIGatewayProxyResponse{
+	response := events.APIGatewayV2HTTPResponse{
 		StatusCode: rw.StatusCode,
 		Headers:    rw.Headers,
 		Body:       rw.Body,
@@ -91,17 +92,19 @@ func (rw *ResponseWriter) WriteHeader(statusCode int) {
 	rw.StatusCode = statusCode
 }
 
-// 🔥 API Gateway のリクエスト内容をログ出力
-func logRequestDetails(req events.APIGatewayProxyRequest) {
+// 🔥 API Gateway のリクエスト詳細をログに出力
+func logRequestDetails(req events.APIGatewayV2HTTPRequest) {
 	// ログ用データ構造体
 	logData := map[string]interface{}{
-		"HTTPMethod":     req.HTTPMethod,
-		"Path":           req.Path,
-		"Headers":        req.Headers,
-		"QueryParams":    req.QueryStringParameters,
-		"PathParams":     req.PathParameters,
-		"RequestContext": req.RequestContext,
-		"Body":           req.Body,
+		"HTTPMethod":  req.RequestContext.HTTP.Method,
+		"RawPath":     req.RawPath,
+		"Headers":     req.Headers,
+		"QueryParams": req.QueryStringParameters,
+		"PathParams":  req.PathParameters,
+		"RequestID":   req.RequestContext.RequestID,
+		"Stage":       req.RequestContext.Stage,
+		"Domain":      req.RequestContext.DomainName,
+		"Body":        req.Body,
 	}
 
 	// JSON に変換して出力
